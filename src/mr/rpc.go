@@ -22,7 +22,31 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+type TaskRPC struct {
+	Phase Phase
+	Index int
+	Input string
+}
+
+type RequestTaskArgs struct {
+	PrevTask *TaskRPC
+	WorkerId int
+}
+
+type RequestTaskReply struct {
+	Task *TaskRPC
+}
+
+type RegisterWorkerArgs struct {
+	WorkerId int
+}
+
+type RegisterWorkerReply struct {
+	MapCount int
+	ReduceCount int
+}
+
+const NoMoreTaskError string = "No More Task"
 
 
 // Cook up a unique-ish UNIX-domain socket name

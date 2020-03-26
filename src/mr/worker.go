@@ -108,18 +108,21 @@ func saveMapOutput(index int, allKV []KeyValue) {
 
 	for i, kvs := range hashedKV {
 		filename := fmt.Sprintf("mr-%v-%v", index, i)
-		file, err := os.Create(filename)
+		tempFile, err := ioutil.TempFile(".", filename + "-temp-*")
 		if err != nil {
-			log.Fatalf("[Map] Worker %v failed to create file %v", workerId, filename)
+			log.Fatalf("[Map] Worker %v failed to create temp file", workerId)
 		}
-		encoder := json.NewEncoder(file)
+		encoder := json.NewEncoder(tempFile)
 		for _, kv := range kvs {
 			err = encoder.Encode(&kv)
 			if err != nil {
 				log.Fatalf("[Map] Worker %v failed to write key %v :  value %v", workerId, kv.Key, kv.Value)
 			}
 		}
-		file.Close()
+		tempFile.Close()
+		if os.Rename(tempFile.Name(), filename) != nil {
+			log.Fatalf("[Map] Worker %v failed to rename temp file to %v", workerId, filename)
+		}
 	}
 }
 
@@ -186,19 +189,22 @@ func doReduce(sortedKVs []KeyValue,
 
 func saveReduceOutput(index int, output []KeyValue) {
 	filename := fmt.Sprintf("mr-out-%v", index)
-	file, err := os.Create(filename)
+	tempFile, err := ioutil.TempFile(".", filename + "-temp-*")
 	if err != nil {
-		log.Fatalf("[Reduce] Worker %v failed to create output file %v", workerId, filename)
+		log.Fatalf("[Reduce] Worker %v failed to create temp file", workerId)
 	}
 
 	for _, kv := range output {
-		_, err := fmt.Fprintf(file, "%v %v\n", kv.Key, kv.Value)
+		_, err := fmt.Fprintf(tempFile, "%v %v\n", kv.Key, kv.Value)
 		if err != nil {
 			log.Fatalf("[Reduce] Worker %v failed to write key %v: value %v", workerId, kv.Key, kv.Value)
 		}
 	}
 
-	file.Close()
+	tempFile.Close()
+	if os.Rename(tempFile.Name(), filename) != nil {
+		log.Fatalf("[Reduce] Worker %v failed to rename temp file to %v", workerId, filename)
+	}
 }
 
 func RequestTask(workerId int, prev *TaskRPC) (*TaskRPC, error) {

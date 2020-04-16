@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"../labgob"
+	"bytes"
 	"fmt"
 	"log"
 	"math/rand"
@@ -260,8 +262,9 @@ func (rf *Raft) runAsFollower() {
 
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
-	rf.updateTerm(rf.currentTerm + 1)
+	rf.currentTerm = rf.currentTerm + 1
 	rf.votedFor = rf.me
+	rf.persist()
 	rf.mu.Unlock()
 
 	rf.logf("start election")
@@ -356,6 +359,7 @@ func (rf *Raft) runAsLeader() {
 func (rf *Raft) updateTerm(term int) {
 	rf.currentTerm = term
 	rf.votedFor = -1
+	rf.persist()
 }
 
 func (rf *Raft) convertToFollower() {
@@ -377,6 +381,7 @@ func (rf *Raft) voteForCandidate(candidateId int, candidateLastTerm int, candida
 	if vote {
 		rf.votedFor = candidateId
 		rf.heartbeatChan <- 1
+		rf.persist()
 	}
 	return vote
 }
@@ -395,6 +400,7 @@ func (rf *Raft) appendEntries(entries []LogEntry, prevTerm int, prevIndex int) b
 
 	if i <= len(entries) {
 		rf.log = append(rf.log[:prevIndex + i], entries[i - 1:]...)
+		rf.persist()
 	}
 	return true
 }
@@ -420,12 +426,12 @@ func (rf *Raft) checkConsistency(prevTerm int, prevIndex int) bool {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	rf.persister.SaveRaftState(w.Bytes())
 }
 
 
@@ -438,17 +444,17 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	if e := d.Decode(&rf.currentTerm); e != nil {
+		log.Fatalf("Decode currentTerm failed %v", e)
+	}
+	if e := d.Decode(&rf.votedFor); e != nil {
+		log.Fatalf("Decode votedFor failed %v", e)
+	}
+	if e := d.Decode(&rf.log); e != nil {
+		log.Fatalf("Decode log failed %v", e)
+	}
 }
 
 
@@ -684,6 +690,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := rf.currentTerm
 	index := len(rf.log) + 1
 	rf.log = append(rf.log, LogEntry{term, command})
+	rf.persist()
 
 	return index, term, true
 }

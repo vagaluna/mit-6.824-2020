@@ -240,24 +240,31 @@ func (rf *Raft) backup(follower int, prevTerm int, prevIndex int) {
 	rf.logf("Backup to %v for Follower %v", i + 1, follower)
 }
 
+func (rf *Raft) notifyHeartbeat() {
+	rf.heartbeatChan <- 1
+}
+
 func (rf *Raft) runAsFollower() {
 	rf.logf("started running as Follower")
+	Loop:
 	for {
 		timer := time.NewTimer(electionTimeout())
 		select {
 		case <- rf.heartbeatChan:
 			timer.Stop()
-		case <- timer.C:
 			if rf.killed() {
-				rf.logf("Follower terminate")
-			} else {
+				break Loop
+			}
+		case <- timer.C:
+			if !rf.killed() {
 				rf.mu.Lock()
 				rf.setState(Candidate)
 				rf.mu.Unlock()
 			}
-			return
+			break Loop
 		}
 	}
+	rf.logf("Follower terminated")
 }
 
 func (rf *Raft) startElection() {
@@ -293,23 +300,24 @@ func (rf *Raft) startElection() {
 
 func (rf *Raft) runAsCandidate() {
 	rf.logf("Started running as Candidate")
-	for !rf.killed() {
+	Loop:
+	for {
 		rf.startElection()
 		timer := time.NewTimer(electionTimeout())
-CandidateLoop:
-		for {
-			select {
-			case <-timer.C:
+		select {
+		case <-timer.C:
+			if rf.killed() {
+				break Loop
+			} else {
 				rf.logf("Election timeout before getting enough votes")
-				break CandidateLoop
-			case <-rf.leaderChan:
-				return
-			case <-rf.followerChan:
-				return
 			}
+		case <-rf.leaderChan:
+			break Loop
+		case <-rf.followerChan:
+			break Loop
 		}
 	}
-	rf.logf("Candidate terminate")
+	rf.logf("Candidate terminated")
 }
 
 func (rf *Raft) runAsLeader() {
@@ -322,20 +330,20 @@ func (rf *Raft) runAsLeader() {
 	}
 	rf.mu.Unlock()
 
+	Loop:
 	for {
 		timer := time.NewTimer(HeartbeatTimeout)
 		select {
 		case <-timer.C:
 			if rf.killed() {
-				rf.logf("Leader terminate")
-				return
+				break Loop
 			}
 
 			rf.broadcastAppendEntries(func(follower int, args *AppendEntriesArgs, reply *AppendEntriesReply) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 
-				if rf.currentTerm != args.Term {
+				if rf.currentTerm != args.Term || rf.state != Leader {
 					return
 				}
 
@@ -351,9 +359,10 @@ func (rf *Raft) runAsLeader() {
 				}
 			})
 		case <-rf.followerChan:
-			return
+			break Loop
 		}
 	}
+	rf.logf("Leader terminated")
 }
 
 func (rf *Raft) updateTerm(term int) {
@@ -366,13 +375,14 @@ func (rf *Raft) convertToFollower() {
 	// Raft must not be running as Follower
 	rf.logf("convert to Follower")
 	rf.setState(Follower)
-	rf.followerChan <- 1
+	go func() {
+		rf.followerChan <- 1
+	}()
 }
 
 
 func (rf *Raft) voteForCandidate(candidateId int, candidateLastTerm int, candidateLastIndex int) bool {
-	// Raft must be in Follower state when voting for others
-	if rf.votedFor >= 0 && rf.votedFor != candidateId {
+	if rf.state != Follower || (rf.votedFor >= 0 && rf.votedFor != candidateId) {
 		return false
 	}
 
@@ -380,7 +390,7 @@ func (rf *Raft) voteForCandidate(candidateId int, candidateLastTerm int, candida
 	vote := compareLog(candidateLastTerm, candidateLastIndex, lastTerm, lastIndex) >= 0
 	if vote {
 		rf.votedFor = candidateId
-		rf.heartbeatChan <- 1
+		go rf.notifyHeartbeat()
 		rf.persist()
 	}
 	return vote
@@ -546,7 +556,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if term > rf.currentTerm {
 			rf.updateTerm(term)
 		}
-		rf.heartbeatChan <- 1
+		go rf.notifyHeartbeat()
 	case Candidate:
 		if term > rf.currentTerm {
 			rf.updateTerm(term)
